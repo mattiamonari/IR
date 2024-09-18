@@ -1,0 +1,9 @@
+
+.collapsible {
+    cursor: pointer;
+  }
+
+
+.collapsible:hover {
+  cursor: pointer;
+}

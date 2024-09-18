@@ -1,0 +1,167 @@
+\documentclass[a4paper,10pt]{report}
+\usepackage[utf8]{inputenc}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{float}
+
+
+% Title Page
+\title{IR Course Project Report}
+\author{Alen Sugimoto \& Mattia Monari}
+
+
+\begin{document}
+\maketitle
+
+In this project, we created a web page in which users can search for free textbooks.
+The textbooks were crawled from 4 different websites.
+
+\section*{Design and Implementation}
+
+\subsection*{Retrieving the Data}
+
+We first created the Scrapy spiders. We have one spider for every website we crawled. The websites we decided to crawl are
+
+\begin{itemize}
+\item \url{https://collection.bccampus.ca/search/};
+\item \url{https://open.umn.edu/opentextbooks/};
+\item \url{https://www.gutenberg.org/ebooks/bookshelf/}; and
+\item \url{https://openlibrary.org/search?subject=Textbooks}.
+\end{itemize}
+
+These websites were chosen for their large collection of free textbooks and their not-so-strict \verb|robots.txt| file.
+
+Each spider creates a JSON file containing a list of objects, each corresponding to one textbook.
+
+There are some notable things about our process of creating the spiders:
+
+\begin{itemize}
+
+\item The BCCampus website had a button for going to the next page, instead of an anchor. So, only at most 6 textbooks were crawled for each subject in the website. For all the other websites, we were able to crawl all the textbooks.
+
+\item The Open Textbook Library website had restrictions in the \verb|robots.txt| file on how quickly a spider could crawl the website. For all the data to be crawled without any bad requests, the \verb|CONCURRENT_REQUESTS| variable in the \verb|settings.py| file of our Scrapy project needed to be set to one, instead of the default of 16.
+
+\item The Gutenburg website contained more than just textbooks, so we chose to crawl only the textbooks within a group of manually selected subjects. Similarly, for the Open Library website, we crawled only the books under the subject \verb|Textbooks|.
+
+\end{itemize}
+
+\subsection*{Indexing the Data}
+
+After crawling, the data was indexed with Solr:
+
+\begin{verbatim}
+> bin/solr start -e cloud
+> bin/post -c <collection-name> <project-root>/data/*
+\end{verbatim}
+
+We have a total of 24843 textbooks in the collection. Each textbook has the following fields:
+
+\begin{itemize}
+\item \verb|title : str         |: The title of the textbook.
+\item \verb|author : str        |: The author(s) of the textbook.
+\item \verb|subjects : List[str]|: The subjects associated with the textbook.
+\item \verb|description : str   |: The description/summary of the textbook.
+\item \verb|url : str           |: The URL of the textbook page.
+\end{itemize}
+
+Since we want every query to consider, by default, all the fields that were indexed, a new field, named \verb|all|, and 5 new copy fields were added such that the \verb|managed-schema.xml| file contains the following lines:
+
+\begin{verbatim}
+...
+<field name="all" type="text_general" uninvertible="true"
+    indexed="true" stored="true"/>
+...
+<copyField source="author" dest="all"/>
+<copyField source="description" dest="all"/>
+<copyField source="subjects" dest="all"/>
+<copyField source="title" dest="all"/>
+<copyField source="url" dest="all"/>
+...
+\end{verbatim}
+
+\subsection*{Creating the UI}
+
+Finally, we created the user interface and added some features. The UI is coded with simple HTML, JavaScript, and CSS. The HTTP requests are sent to Solr using \verb|XMLHttpRequest|. The following parameters are added to the request URL for every query:
+
+\begin{verbatim}
+["wt=json",
+ "indent=on",
+ "fl=url,subjects,description,author,title",
+ "json.limit=100",
+ "df=all"]
+\end{verbatim}
+
+There was also a problem surrounding CORS when trying to send requests to Solr. It was solved by consulting this website: \url{https://laurenthinoul.com/how-to-enable-cors-in-solr/}.
+
+We also implemented some extra features:
+
+\begin{itemize}
+\item Results presentation: The textbooks are presented to the user in a table. The \verb|<table>| tag in HTML was used for the implementation.
+\item More Button: At most 50 textbooks are shown after a query search. Users then have the option to get another 50 textbooks using the button at the bottom of the page.
+\item Filtering: By default, the user's query searches the collection by all fields. They may also choose to search by either title, subjects, or author. We did this by using Solr's built in search format. For example, if the user chooses to search by author and enters the query \verb|Mahoney|, the query string sent to the Solr server would be \verb|author:Mahoney|.
+\item Results clustering: Users have the option to only see a specific cluster of textbooks after querying. The clusters are classified into subjects and users can select a cluster/subject in the results page. Also, the subjects are ordered such that the most relevant ones are displayed first.
+\end{itemize}
+
+\section*{User Evaluation}
+
+We got 4 users to evaluate our system. From the SUS feedback form given to the users after evaluation, the positive feedbacks were
+
+\begin{itemize}
+\item our system was simple and easy to use;
+\item there were no inconsistencies in the system; and
+\item the UI was useful in finding free textbooks.
+\end{itemize}
+
+However, we saw some issues in the system and received some suggestions from the users:
+
+\begin{itemize}
+\item When sending the query to Solr, the string did not replace any characters with escape sequences, resulting in bad requests to the server.
+\item The search bar became too small after results were presented.
+\item There was already a default query in search bar, which the users did not like. They preferred to have the search bar empty.
+\end{itemize}
+
+All the above issues were fixed after the user evaluation.
+
+\newpage
+
+
+
+\section*{Other}
+
+We also decided to normalize subjects of the retrived texbooks using this python code:
+
+\begin{lstlisting}[language=Python]
+import json
+from cdifflib import CSequenceMatcher
+import difflib
+
+textbook_categories = ['Anthropology', 'Humanities', .... ,
+                       'Technology', 'Zoology']
+new_subj = []
+
+def refac_json(filename):
+    global new_subj
+    with open('data/'+filename+'.json') as file:
+        data = json.load(file)
+        for e in data:
+            for subject in e["subjects"]:
+                tmp = difflib.get_close_matches(subject, textbook_categories, 1, 0.6)
+                if len(tmp) > 0 and tmp[0] not in new_subj and subject:
+                    new_subj.append(tmp[0])
+                if len(new_subj) > 0:
+                    e["subjects"] = new_subj
+            new_subj = []
+
+        with open('data/'+filename+'refactored.json', 'w') as new:
+            json.dump(data, new, indent=2)
+
+
+refac_json("bccampus")
+refac_json("gutenberg")
+refac_json("open_umn")
+refac_json("openlibrarydata")
+
+\end{lstlisting}
+This was done because we had to many similar/insignificant subjects. This code, thanks to the help of the difflib package, replace the subjects of a textbooks with the closest one matched from a predefined array containing standard subjects.
+
+\end{document}

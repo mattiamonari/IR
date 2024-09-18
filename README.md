@@ -43,4 +43,3 @@ To clean up:
 bin/solr delete -c <collection-name>
 bin/solr stop -all
 ```
-"# IR" 
